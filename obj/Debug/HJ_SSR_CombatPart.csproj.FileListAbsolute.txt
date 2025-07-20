@@ -1,0 +1,2 @@
+D:\RimworldSing\code\HJ_SSR_CombatPart\obj\Debug\HJ_SSR_CombatPart.csproj.AssemblyReference.cache
+D:\RimworldSing\code\HJ_SSR_CombatPart\obj\Debug\HJ_SSR_CombatPart.csproj.CoreCompileInputs.cache
