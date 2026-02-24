@@ -17,6 +17,24 @@ namespace HJ_SSR.Weapons
 
         protected override bool TryCastShot()
         {
+            // 检查 shooter 和 target 是否有效
+            if (caster == null || caster.Map == null)
+            {
+                Log.Message($"[HJ_SSR] TryCastShot: 射手无效或无地图。射手: {caster?.ToString() ?? "null"}");
+                return false;
+            }
+            if (currentTarget.Thing == null || currentTarget.Thing.Map == null)
+            {
+                Log.Message($"[HJ_SSR] TryCastShot: 目标无效或无地图。目标: {currentTarget.Thing?.ToString() ?? "null"}");
+                return false;
+            }
+
+            // 确保射手和目标在同一地图
+            if (currentTarget.Thing.Map != caster.Map)
+            {
+                Log.Message($"[HJ_SSR] TryCastShot: 射手和目标不在同一地图。射手地图: {caster.Map?.ToString() ?? "null"}，目标地图: {currentTarget.Thing.Map?.ToString() ?? "null"}");
+                return false;
+            }
             // Log.Message("customTryCastSHot");
             if (currentTarget.HasThing && currentTarget.Thing.Map != caster.Map)
             {

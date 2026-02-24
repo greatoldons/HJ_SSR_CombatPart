@@ -196,18 +196,7 @@ namespace HJ_SSR.Weapons
                         bool result = base.TryCastShot();
                         // Log.Message($"HJ_SSR shotReult{result}");
                         currentTarget = original;
-                        //if (lastTarget != null && lastTarget.CenterVector3 == scatteredTarget.CenterVector3)
-                        //{  
-                        //    Log.Message($"shot lastPosition :{lastTarget}  newPosition {scatteredTarget}");
-                        //    scatteredTarget.CenterVector3.Set(scatteredTarget.Cell.x + 1, scatteredTarget.Cell.y, scatteredTarget.Cell.z + 1);
-                        //    Log.Message($"shot newPosition {scatteredTarget}");
-                        //}
-                        //lastTarget = scatteredTarget;
-                        //// 临时修改目标并发射
-                        //LocalTargetInfo original = currentTarget;
-                        //currentTarget = scatteredTarget;
-                        //base.TryCastShot();
-                        //currentTarget = original;
+                        if (!result) return;
                     }
                     //放在这，让只播一次
                     verbProps.soundCast?.PlayOneShot(new TargetInfo(caster.Position, caster.MapHeld));
@@ -410,7 +399,8 @@ namespace HJ_SSR.Weapons
 
                     if (verbProps.canGoWild && !Rand.Chance(shotReport.AimOnTargetChance_IgnoringPosture))
                     {
-                        resultingLine.ChangeDestToMissWild_NewTemp(shotReport.AimOnTargetChance_StandardTarget, Projectile.projectile.flyOverhead, caster.Map);
+                        resultingLine.ChangeDestToMissWild(shotReport.AimOnTargetChance_StandardTarget, Projectile.projectile.flyOverhead, caster.Map);
+                        //resultingLine.ChangeDestToMissWild_NewTemp(shotReport.AimOnTargetChance_StandardTarget, Projectile.projectile.flyOverhead, caster.Map);
                         ProjectileHitFlags projectileHitFlags2 = ProjectileHitFlags.NonTargetWorld;
                         if (Rand.Chance(0.5f) && canHitNonTargetPawnsNow) projectileHitFlags2 |= ProjectileHitFlags.NonTargetPawns;
 
@@ -488,7 +478,8 @@ namespace HJ_SSR.Weapons
                 else
                 {
                     thing.SetForbidden(true, false);
-                    GenPlace.TryPlaceThing(thing, caster.InteractionCell == null ? caster.Position : caster.InteractionCell, caster.Map, ThingPlaceMode.Near, out _, null, null, default);
+                    // 着火的判断
+                    //GenPlace.TryPlaceThing(thing, caster.InteractionCell == null ? caster.Position : caster.InteractionCell, caster.Map, ThingPlaceMode.Near, out _, null, null, default);
                 }
             }
         }
