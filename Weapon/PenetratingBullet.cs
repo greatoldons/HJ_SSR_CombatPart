@@ -15,19 +15,31 @@ namespace HJ_SSR.Weapons
 
         // 获取武器的伤害倍数（从 Thing 获取 StatDefOf.RangedWeapon_DamageMultiplier）
         float weaponDamageMultiplier => equipment?.GetStatValue(StatDefOf.RangedWeapon_DamageMultiplier) ?? 1f;
-        public float PenetratingPowerBase => weaponDamageMultiplier * PenetrationFloorPercentage;
+        public float PenetratingPowerBase => (MaxPenetratingPower > 0f ? MaxPenetratingPower : penetratingPower) * PenetrationFloorPercentage;
         //public override float ArmorPenetration => Extension == null ? def.projectile.GetArmorPenetration(weaponDamageMultiplier) : def.projectile.GetArmorPenetration(weaponDamageMultiplier) * (penetratingPower / MaxPenetratingPower);
         public override float ArmorPenetration => Extension == null ? def.projectile.GetArmorPenetration(equipment) : (weaponDamageMultiplier * (penetratingPower / MaxPenetratingPower));
         public bool ShouldTerminate;
 
         Vector3 initialVector;
 
-        IntVec3 cachedPosition;
-
         Vector3 trueOrigin;
+        readonly HashSet<IntVec3> checkedCells = new HashSet<IntVec3>();
+        int dbgTickIntervals;
+        int dbgPathChecks;
+        int dbgStepSamples;
+        int dbgUniqueCells;
+        int dbgThingCandidates;
+        int dbgCanHitPasses;
+        int dbgDestroyedOutOfBounds;
+        int dbgSubTicks;
+        int dbgFriendlySkips;
+        int dbgFilteredTransientSkips;
+        string dbgDestroyReason = "unknown";
+        const float SimpleHitCost = 0.05f;
 
         ModExtension_PenetratingProjectile Extension => def.GetModExtension<ModExtension_PenetratingProjectile>();
 
+        //  穿透力 和  穿透消耗值
         public override int DamageAmount => ShouldTerminate ? def.projectile.GetDamageAmount(StopperDamageMulti,equipment) : def.projectile.GetDamageAmount(overpenDamageMulti, equipment);
         public float overpenDamageMulti => (Extension == null) ? 0.5f : Extension.overpenDamageMulti;
         public float StopperDamageMulti => (Extension == null) ? 1f : Extension.stopperDamageMulti;
@@ -109,81 +121,30 @@ namespace HJ_SSR.Weapons
 
             // 10. 最大穿透数更新
             PenetratingCount = maxPenetratingCount;
+
+            dbgTickIntervals = 0;
+            dbgPathChecks = 0;
+            dbgStepSamples = 0;
+            dbgUniqueCells = 0;
+            dbgThingCandidates = 0;
+            dbgCanHitPasses = 0;
+            dbgDestroyedOutOfBounds = 0;
+            dbgSubTicks = 0;
+            dbgFriendlySkips = 0;
+            dbgFilteredTransientSkips = 0;
+            dbgDestroyReason = "alive";
         }
 
         protected override void Tick()
         {
-            if ((penetratingPower <= PenetratingPowerBase && maxPenetratingCount <0)|| PenetratingCount == 0|| ticksToImpact <= 0 || Map == null)
+            if (penetratingPower <= PenetratingPowerBase || Map == null)
             {
-                Log.Message($"Destroy penertP{penetratingPower}  <= {PenetratingPowerBase}  or ticksToImpact = {ticksToImpact}");
+                dbgDestroyReason = $"penetration_end p:{penetratingPower:F3} base:{PenetratingPowerBase:F3} mapNull:{Map == null}";
                 canDestroyNow = true;
                 Destroy();
                 return;
             }
-            if(!cachedPosition.InBounds(Map))
-            {
-                canDestroyNow = true;
-                Destroy();
-                return;
-            }
-            if (Map != null)
-            {
-                base.Tick();
-            }
-            // Log.Message($"[PenetratingBullet] Tick - Current Position: {Position}, Cached Position: {cachedPosition}");
-            // 位置更新 + 计算拦截
-            if (Position != cachedPosition)
-            {
-                // Log.Message($"[PenetratingBullet] Position changed from {cachedPosition} to {Position}");
-                // 检查从上一个位置到当前位置路径上的所有格子
-                // 这样可以避免子弹快速移动时跳过某些格子
-                if (cachedPosition.IsValid && cachedPosition.InBounds(Map) && Position.InBounds(Map))
-                {
-                    // 计算方向向量
-                    IntVec3 direction = Position - cachedPosition;
-                    int steps = Mathf.Max(Mathf.Abs(direction.x), Mathf.Abs(direction.z));
-                    // Log.Message($"[PenetratingBullet] Direction: {direction}, Steps: {steps}");
-                    
-                    if (steps > 0)
-                    {
-                        // 检查路径上的每个格子（使用浮点数计算避免整数除法问题）
-                        for (int i = 0; i <= steps; i++)
-                        {
-                            float t = (float)i / steps;
-                            IntVec3 checkCell = new IntVec3(
-                                Mathf.RoundToInt(cachedPosition.x + direction.x * t),
-                                0,
-                                Mathf.RoundToInt(cachedPosition.z + direction.z * t)
-                            );
-                            
-                            // Log.Message($"[PenetratingBullet] Checking cell [{i}/{steps}]: {checkCell} (t={t:F3})");
-                            
-                            if (checkCell.InBounds(Map) && CheckForFreeIntercept(checkCell))
-                            {
-                                // Log.Message($"[PenetratingBullet] Hit detected at cell: {checkCell}");
-                                // 如果击中了物体，更新缓存位置并返回
-                                cachedPosition = Position;
-                                return;
-                            }
-                        }
-                    }
-                }
-                else
-                {
-                    // Log.Message($"[PenetratingBullet] Cached position invalid or out of bounds. cachedPosition.IsValid: {cachedPosition.IsValid}, cachedPosition.InBounds: {cachedPosition.InBounds(Map)}, Position.InBounds: {Position.InBounds(Map)}");
-                }
-                // 检查当前位置（包括第一次调用时）
-                // Log.Message($"[PenetratingBullet] Checking final position: {Position}");
-                if (CheckForFreeIntercept(Position))
-                {
-                    // Log.Message($"[PenetratingBullet] Hit detected at final position: {Position}");
-                    cachedPosition = Position;
-                    return;
-                }
-                cachedPosition = Position;
-            }
-            ticksToImpact--;
-            Log.Message($"SSR_Combat_tickToImpact:{ticksToImpact}");
+            base.Tick();
             // 爆炸物逻辑
             if (compExplosive != null && fuseActivated)
             {
@@ -195,62 +156,205 @@ namespace HJ_SSR.Weapons
             }
         }
 
+        protected override void TickInterval(int delta)
+        {
+            dbgTickIntervals++;
+            foreach (ThingComp comp in AllComps)
+            {
+                comp.CompTickInterval(delta);
+            }
+            for (int i = 0; i < delta; i++)
+            {
+                dbgSubTicks++;
+                lifetime--;
+                if (landed || Destroyed)
+                {
+                    return;
+                }
+
+                Vector3 exactPosition = ExactPosition;
+                ticksToImpact--;
+                if (!ExactPosition.InBounds(Map))
+                {
+                    dbgDestroyedOutOfBounds++;
+                    dbgDestroyReason = $"out_of_bounds exact:{ExactPosition} delta:{delta}";
+                    ticksToImpact++;
+                    Position = ExactPosition.ToIntVec3();
+                    canDestroyNow = true;
+                    Destroy();
+                    return;
+                }
+
+                Vector3 exactPosition2 = ExactPosition;
+                if (CheckForFreeInterceptBetween(exactPosition, exactPosition2))
+                {
+                    canDestroyNow = true;
+                    Destroy();
+                    return;
+                }
+
+                Position = ExactPosition.ToIntVec3();
+                if (ticksToImpact <= 0)
+                {
+                    if (DestinationCell.InBounds(Map))
+                    {
+                        Position = DestinationCell;
+                    }
+                    ImpactSomething();
+                    return;
+                }
+            }
+        }
+
+        /// <summary>在 last/new 两个精确坐标之间采样路径格，检查可命中对象。</summary>
+        private bool CheckForFreeInterceptBetween(Vector3 lastExactPos, Vector3 newExactPos)
+        {
+            dbgPathChecks++;
+            if (lastExactPos == newExactPos)
+            {
+                return false;
+            }
+
+            List<Thing> interceptors = Map.listerThings.ThingsInGroup(ThingRequestGroup.ProjectileInterceptor);
+            for (int i = 0; i < interceptors.Count; i++)
+            {
+                if (interceptors[i].TryGetComp<CompProjectileInterceptor>().CheckIntercept(this, lastExactPos, newExactPos))
+                {
+                    Impact(null, blockedByShield: true);
+                    return true;
+                }
+            }
+
+            IntVec3 intVec = lastExactPos.ToIntVec3();
+            IntVec3 intVec2 = newExactPos.ToIntVec3();
+            if (intVec2 == intVec)
+            {
+                return false;
+            }
+            if (!intVec.InBounds(Map) || !intVec2.InBounds(Map))
+            {
+                return false;
+            }
+            if (intVec2.AdjacentToCardinal(intVec))
+            {
+                return CheckForFreeIntercept(intVec2);
+            }
+
+            // 正交移动：Bresenham 枚举线段上每一格，避免 0.2 步长 + floor(maxSteps) 漏掉中间墙格。
+            // 必须复制 List：GenSight.BresenhamCellsBetween 返回的是内部复用列表，嵌套调用会被清空。
+            if (intVec.x == intVec2.x || intVec.z == intVec2.z)
+            {
+                List<IntVec3> lineCells = new List<IntVec3>(GenSight.BresenhamCellsBetween(intVec, intVec2));
+                for (int li = 0; li < lineCells.Count; li++)
+                {
+                    IntVec3 c = lineCells[li];
+                    if (!c.InBounds(Map))
+                    {
+                        continue;
+                    }
+                    dbgStepSamples++;
+                    dbgUniqueCells++;
+                    if (CheckForFreeIntercept(c))
+                    {
+                        return true;
+                    }
+                }
+                return false;
+            }
+
+            Vector3 vect = lastExactPos;
+            Vector3 v = newExactPos - lastExactPos;
+            float mag = v.MagnitudeHorizontal();
+            if (mag < 1E-4f)
+            {
+                return false;
+            }
+            Vector3 step = v.normalized * 0.2f;
+            // 向上取整并留余量，避免 (int)(mag/0.2) 偏小而提前结束、跳过终点前多格。
+            int maxSteps = Mathf.CeilToInt(mag / 0.2f) + 2;
+            checkedCells.Clear();
+            int stepCount = 0;
+            IntVec3 currentCell;
+            do
+            {
+                vect += step;
+                currentCell = vect.ToIntVec3();
+                dbgStepSamples++;
+                if (!checkedCells.Contains(currentCell))
+                {
+                    dbgUniqueCells++;
+                    if (CheckForFreeIntercept(currentCell))
+                    {
+                        return true;
+                    }
+                    checkedCells.Add(currentCell);
+                }
+                stepCount++;
+                if (stepCount > maxSteps)
+                {
+                    if (!checkedCells.Contains(intVec2) && CheckForFreeIntercept(intVec2))
+                    {
+                        return true;
+                    }
+                    return false;
+                }
+            }
+            while (currentCell != intVec2);
+
+            return false;
+        }
+
         List<Thing> thingList = new List<Thing>();
         /// <summary>
         /// 计算子弹是否有击中，是否可以被拦截
         /// </summary>
         /// <param name="c"></param>
         /// <returns></returns>
+        /// <summary>处理单个格的命中采样：记录日志、应用伤害并扣减穿透。</summary>
         private bool CheckForFreeIntercept(IntVec3 c)
         {
-            if (destination.ToIntVec3() == c)
-            {
-                // Log.Message($"[PenetratingBullet] CheckForFreeIntercept: Cell {c} is destination, skipping");
-                return false;
-            }
+            // TODO: 调试日志 除了调试以外不要开，很多
+            // LogPathCell(c);
             thingList = c.GetThingList(base.Map);
-            // Log.Message($"[PenetratingBullet] CheckForFreeIntercept: Cell {c} has {thingList.Count} things");
             for (int i = 0; i < thingList.Count; i++)
             {
                 Thing thing = thingList[i];
+                dbgThingCandidates++;
+                // 过滤
+                if (thing is Projectile || thing is Mote || thing is Filth || thing is Gas)
+                {
+                    dbgFilteredTransientSkips++;
+                    continue;
+                }
                 // Log.Message($"[PenetratingBullet] CheckForFreeIntercept: Checking thing {i}: {thing?.def?.defName ?? "null"} at {c}");
                 if (!CanHit(thing))
                 {
-                    // Log.Message($"[PenetratingBullet] CheckForFreeIntercept: Cannot hit thing {thing?.def?.defName ?? "null"}");
                     continue;
                 }
-
-                // 开着的门处理下
-                if (thing.def.Fillage == FillCategory.Full)
+                if (attackedThings.Contains(thing))
                 {
-                    if (!(thing is Building_Door building_Door) || !building_Door.Open)
-                    {
-                        Impact(thing);
-                        return true;
-                    }
+                    continue;
                 }
-                if (thing is Building)
+                if (IsFriendlyBuildingOrPawn(thing))
                 {
-                    //Log.Message($"SSR_Combat_building {thing.def.defName} num {num2}");
-                    if (launcher != null && thing.Faction != null && launcher.Faction != null && !thing.Faction.HostileTo(launcher.Faction))
-                    {
-                        Log.Message($"same Faction");
-                        if (thing.def.defName == "Sandbags")
-                        {
-                            return false;
-                        }
-                    }
+                    dbgFriendlySkips++;
+                    continue;
                 }
-                else if (thing is Pawn pawn)
+                dbgCanHitPasses++;
+                attackedThings.Add(thing);
+                // LogHitCell(c, thing);
+                ApplyHitDamage(thing, c);
+                // 草类/小植物只做命中日志，不参与本阶段穿透消耗， 会被草  灰尘 气体等消耗，如果有问题check here
+                if (thing is Plant plant && !IsTreePlant(plant))
                 {
-
-                    if (launcher != null && pawn.Faction != null && launcher.Faction != null && !pawn.Faction.HostileTo(launcher.Faction))
-                    {
-                        return false;
-                    }
+                    continue;
                 }
-                Impact(thing);
-                return true;
+                penetratingPower -= SimpleHitCost;
+                if (penetratingPower <= PenetratingPowerBase)
+                {
+                    ShouldTerminate = true;
+                    return true;
+                }
             }
             return false;
         }
@@ -263,121 +367,16 @@ namespace HJ_SSR.Weapons
         /// <param name="blockedByShield"></param>
         protected override void Impact(Thing hitThing, bool blockedByShield = false)
         {
-            Log.Message($"SSR_Combat Impact Something Position :{Position}");
-            if (blockedByShield)
-            {
-                Destroy();
-                return;
-            }
-            if (attackedThings.Contains(hitThing) || (penetratingPower <= PenetratingPowerBase && maxPenetratingCount < 0) || PenetratingCount == 0)
-            {
-                landed = false;
-                return;
-            }
-            canDestroyNow = false;
-            float removeValue = 0;
-            if (hitThing is Building)
-            {
-                Log.Message($"SSR_Combat heat building");
-                Effecter effect = RimWorld.EffecterDefOf.DamageDiminished_Metal.Spawn();
-                effect.Trigger(hitThing, hitThing);
-                //effect.Trigger(hitThing, hitThing);
-                if (hitThing.def.useHitPoints)
-                {
-                    removeValue = hitThing.HitPoints * BuildingEquivalentMulti;
-                }
-                else
-                {
-                    penetratingPower = 0;
-                }
-            }
-            if (hitThing is Pawn pawn)
-            {
-                removeValue = GetPawnArmor(pawn) * 2f * ArmorEquivalentMulti + (float)(Math.Sqrt(pawn.BodySize) * pawn.BodySize) * BodysizeEquivalentMulti;
-                EffecterDef damageEffecter = pawn.RaceProps.FleshType.damageEffecter;
-                if (damageEffecter != null)
-                {
-                    if (pawn.health.woundedEffecter != null && pawn.health.woundedEffecter.def != damageEffecter)
-                    {
-                        pawn.health.woundedEffecter.Cleanup();
-                    }
-                    pawn.health.woundedEffecter = damageEffecter.Spawn();
-                    pawn.health.woundedEffecter.Trigger(pawn, launcher ?? pawn);
-                    pawn.health.woundedEffecter.Trigger(pawn, launcher ?? pawn);
-                    pawn.health.woundedEffecter.Trigger(pawn, launcher ?? pawn);
-                }
-            }
-            if (hitThing is Plant plant)
-            {
-                Log.Message($"SSR_Combat heat Plant");
-                if ((plant.def.ingestible != null && plant.def.ingestible.foodType == FoodTypeFlags.Tree) || plant.def.defName == "BurnedTree")
-                {
-                    removeValue = TreeEquivalent;
-                    Effecter effecter = EffecterDefOf.Effecter_SSR_PGHitTrunk.Spawn();
-                    TargetInfo targetInfo = new TargetInfo(plant.Position, Map, false);
-                    effecter.Trigger(targetInfo, targetInfo);
-                    effecter.Cleanup();
-                    if (!plant.LeaflessNow && plant.def.defName != "Plant_SaguaroCactus")
-                    {
-                        Effecter effecter2 = EffecterDefOf.Effecter_SSR_PGHitTree.Spawn();
-                        effecter2.Trigger(targetInfo, targetInfo);
-                        effecter2.Cleanup();
-                    }
-                }
-            }
-            if (hitThing != null && IsChunk(hitThing.def.thingCategories))
-            {
-                Log.Message($"SSR_Combat Chunk");
-                removeValue = ChunkEquivalent;
-            }
-            if (hitThing != null)
-            {
-                Log.Message($"SSR_Combat Just Add");
-                attackedThings.Add(hitThing);
-            }
-            if (penetratingPower - PenetratingPowerBase <= removeValue)
-            {
-                ShouldTerminate = true;
-            }
-            Log.Message($"SSR_Combat GoImpact");
-            //base.Impact(hitThing);
-            OriginalImpact(hitThing);
-            if (def.projectile.explosionRadius > 0)
-            {
-                Explode();
-            }
+            // 路径调试阶段：禁用真实命中与伤害结算，避免干扰轨迹验证。
+            // 原版impact 似乎会干扰穿透命中的计算，总会跳cell计算
             landed = false;
-            if (hitThing == null)
-            {
-                if (Rand.Chance(ArmorPenetration / def.projectile.GetArmorPenetration(equipment)))
-                {
-                    removeValue = BounceEquivalent;
-                }
-                else
-                {
-                    penetratingPower = 0;
-                }
-            }
-            if(PenetratingCount < 0)
-            {
-                penetratingPower -= removeValue;
-            }
-            else
-            {
-                PenetratingCount = (PenetratingCount > 0) ? --PenetratingCount : PenetratingCount;
-            }
-            fuseActivated = true;
+        }
 
-            float remainingRange = equipmentDef.Verbs[0].range + ExtraRange - (ExactPosition - trueOrigin).magnitude;
-
-            if (remainingRange <= 0 || (penetratingPower <= PenetratingPowerBase && maxPenetratingCount < 0) || PenetratingCount == 0)
-            {
-                canDestroyNow = true;
-                Destroy();
-                return;
-            }
-            // 如果还有穿透力，确保子弹继续飞行，不要过早销毁
-            canDestroyNow = false;
+        protected override void ImpactSomething()
+        {
+            dbgDestroyReason = "impact_disabled_path_debug";
+            canDestroyNow = true;
+            Destroy();
         }
         public override void Destroy(DestroyMode mode = DestroyMode.Vanish)
         {
@@ -388,187 +387,97 @@ namespace HJ_SSR.Weapons
             base.Destroy(mode);
         }
 
-        /// <summary>
-        /// 弹道击中后重新计算
-        /// 
-        /// </summary>
-        public void Retarget()
+        /// <summary>仅输出本帧路径检测实际遍历到的格子（不含因等于 destination 而跳过的格）。</summary>
+        private void LogPathCell(IntVec3 c)
         {
-            float remainingRange = 55;
-            if (equipmentDef != null && equipmentDef.Verbs.Any())
-            {
-                remainingRange = equipmentDef.Verbs[0].range - (ExactPosition - trueOrigin).magnitude + ExtraRange;
-            }
-            if (remainingRange <= 0)
-            {
-                canDestroyNow = true;
-                Destroy();
-                return;
-            }
-            
-            if (remainingRange > MaxSearchRadius) remainingRange = MaxSearchRadius;
-            int num = GenRadial.NumCellsInRadius(remainingRange);
-            int tries = 20 + (int)remainingRange;
-            IntVec3 retargetCell = IntVec3.Invalid;
-            List<Thing> affectedTargets = new List<Thing>();
-
-            //20 times of trying random
-            if(straightPassThrough)
-            {
-                retargetCell = Position + initialVector.ToIntVec3();
-                Log.Message("Direct PassThrough");
-            }
-            else
-            {
-                while (tries > 0)
-                {
-                    int i = Rand.Range(1, num);
-                    if (Math.Abs(Vector3.Angle(initialVector, GenRadial.RadialPattern[i].ToVector3().Yto0())) < PostPenetrationDeviationAngle)
-                    {
-                        retargetCell = Position + GenRadial.RadialPattern[i];
-                        break;
-                    }
-                    tries--;
-                }
-            }
-
-
-            //Fall back enum check
-            if (!retargetCell.IsValid)
-            {
-                List<IntVec3> affectedCells = new List<IntVec3>();
-                for (int i = 1; i < num; i++)
-                {
-                    if (Math.Abs(Vector3.Angle(initialVector, GenRadial.RadialPattern[i].ToVector3().Yto0())) < PostPenetrationDeviationAngle)
-                    {
-                        affectedCells.Add(Position + GenRadial.RadialPattern[i]);
-                    }
-                }
-                if (affectedCells.Any())
-                {
-                    if (DebugSettings.godMode)
-                    {
-                        foreach (var c in affectedCells)
-                        {
-                            Map.debugDrawer.FlashCell(c);
-                        }
-                    }
-                    retargetCell = affectedCells[Rand.Range(0, affectedCells.Count - 1)];
-                }
-            }
-            if (!retargetCell.IsValid)
-            {
-                canDestroyNow = true;
-                Destroy();
-                return;
-            }
-            else if (Map != null && Position.InBounds(Map))
-            {
-                origin = ExactPosition;
-                if (retargetCell.InBounds(Map)) affectedTargets = retargetCell.GetThingList(Map).ToList();
-                Thing target = null;
-                if (DebugSettings.godMode) Map.debugDrawer.FlashCell(retargetCell);
-                if (affectedTargets.Count > 0)
-                {
-                    target = affectedTargets[Rand.Range(0, affectedTargets.Count - 1)];
-                }
-                usedTarget = target == null ? retargetCell : new LocalTargetInfo(target);
-                destination = usedTarget.Cell.ToVector3Shifted() + Gen.RandomHorizontalVector(0.3f);
-                ticksToImpact = Mathf.CeilToInt(StartingTicksToImpact);
-                if (ticksToImpact < 1)
-                {
-                    ticksToImpact = 1;
-                }
-            }
+            Log.Message($"[SSR_PB_PATH][{thingIDNumber}] tick={Find.TickManager.TicksGame} cell={c} p={penetratingPower:F2}");
         }
-       
-        public void Retarget_Direct()
-        {
-            // 计算剩余射程（初始射程 + 额外射程 - 已飞行距离）
-            float remainingRange = equipmentDef.Verbs[0].range + ExtraRange - (ExactPosition - trueOrigin).magnitude;
-            //if (remainingRange <= 0 || penetratingPower <= PenetratingPowerBase || PenetratingCount ==0)
-            if (remainingRange <= 0 || (penetratingPower <= PenetratingPowerBase && maxPenetratingCount < 0) || PenetratingCount == 0)
-            {
-                canDestroyNow = true;
-                Destroy();
-                return;
-            }
-            // 沿初始方向延伸目标点（不改变方向）
-            Vector3 newDestination = ExactPosition + initialVector.normalized * remainingRange;
-            // 修正目标点在地图边界内
-            IntVec3 newDestCell = newDestination.ToIntVec3();
-            if (!newDestCell.InBounds(Map))
-            {
-                newDestCell = newDestCell.ClampInsideMap(Map);
-                newDestination = newDestCell.ToVector3Shifted();
-            }
-            // 更新目标位置和飞行时间
-            destination = newDestination;
-            ticksToImpact = Mathf.CeilToInt(remainingRange / def.projectile.SpeedTilesPerTick);
-            if (ticksToImpact < 1) ticksToImpact = 1;
 
-            // 调试显示路径（可选）
-            //if (DebugSettings.godMode)
-            //{
-            //    Map.debugDrawer.FlashLine(ExactPosition.ToIntVec3(), destination.ToIntVec3(), duration: 100, SimpleColor.Red);
-            //}
-        }
-        
-        private static float GetPawnArmor(Pawn pawn)
+        private void LogHitCell(IntVec3 c, Thing thing)
         {
-            float statValue = pawn.GetStatValue(RimWorld.StatDefOf.ArmorRating_Sharp, true);
-            float num = statValue;
-            List<Apparel> list = pawn.apparel?.WornApparel ?? Enumerable.Empty<Apparel>().ToList();
-            foreach (Apparel apparel2 in list)
-            {
-                num += apparel2.GetStatValue(RimWorld.StatDefOf.ArmorRating_Sharp, true) * apparel2.def.apparel.HumanBodyCoverage;
-            }
-            if (num > 0.0001f)
-            {
-                foreach (BodyPartRecord bodyPartRecord in pawn.RaceProps.body.AllParts)
-                {
-                    BodyPartRecord bodyPartRecord2 = bodyPartRecord;
-                    float num2 = statValue;
-                    if (bodyPartRecord2.depth == BodyPartDepth.Outside && (bodyPartRecord2.coverage >= 0.1 || bodyPartRecord2.def == BodyPartDefOf.Eye || bodyPartRecord2.def == BodyPartDefOf.Torso))
-                    {
-                        foreach (Apparel apparel3 in list)
-                        {
-                            if (apparel3.def.apparel.CoversBodyPart(bodyPartRecord2))
-                            {
-                                num2 += apparel3.GetStatValue(RimWorld.StatDefOf.ArmorRating_Sharp, true);
-                            }
-                        }
-                        return num2;
-                    }
-                }
-            }
-            return num;
+            Log.Message($"[SSR_PB_HITCELL][{thingIDNumber}] tick={Find.TickManager.TicksGame} cell={c} thing={thing?.def?.defName ?? "null"} id={thing?.thingIDNumber ?? -1} p={penetratingPower:F2}");
         }
-        public static bool IsChunk(List<ThingCategoryDef> thingCategory)
+
+        private static bool IsTreePlant(Plant plant)
         {
-            foreach (ThingCategoryDef x in thingCategory ?? Enumerable.Empty<ThingCategoryDef>())
+            if (plant == null)
             {
-                if (IsChunk(x)) return true;
+                return false;
+            }
+            return (plant.def.ingestible != null && plant.def.ingestible.foodType == FoodTypeFlags.Tree) || plant.def.defName == "BurnedTree";
+        }
+
+        /// <summary>过滤同阵营建筑/生物，避免友军伤害。</summary>
+        private bool IsFriendlyBuildingOrPawn(Thing thing)
+        {
+            if (thing == null || launcher == null || launcher.Faction == null || thing.Faction == null)
+            {
+                return false;
+            }
+            if (thing is Building || thing is Pawn)
+            {
+                return !thing.Faction.HostileTo(launcher.Faction);
             }
             return false;
         }
-        public static bool IsChunk(ThingCategoryDef thingCategory)
-        {
-            if (thingCategory == ThingCategoryDefOf.Chunks || ThingCategoryDefOf.Chunks.childCategories.Contains(thingCategory)) return true;
-            return false;
-        }
 
-        protected virtual void Explode()
+        /// <summary>应用命中视觉效果、战斗日志与伤害。</summary>
+        private void ApplyHitDamage(Thing hitThing, IntVec3 impactCell)
         {
-            Map map = base.Map;
-            if (def.projectile.explosionEffect != null)
+            if (hitThing == null)
             {
-                Effecter effecter = def.projectile.explosionEffect.Spawn();
-                effecter.Trigger(new TargetInfo(base.Position, map), new TargetInfo(base.Position, map));
+                return;
+            }
+            if (hitThing is Pawn hitPawn)
+            {
+                EffecterDef damageEffecter = hitPawn.RaceProps.FleshType.damageEffecter;
+                if (damageEffecter != null)
+                {
+                    if (hitPawn.health.woundedEffecter != null && hitPawn.health.woundedEffecter.def != damageEffecter)
+                    {
+                        hitPawn.health.woundedEffecter.Cleanup();
+                    }
+                    hitPawn.health.woundedEffecter = damageEffecter.Spawn();
+                    hitPawn.health.woundedEffecter.Trigger(hitPawn, launcher ?? hitPawn);
+                }
+            }
+            else if (hitThing is Plant plant && IsTreePlant(plant))
+            {
+                TargetInfo targetInfo = new TargetInfo(plant.Position, Map, false);
+                Effecter effecter = EffecterDefOf.Effecter_SSR_PGHitTrunk.Spawn();
+                effecter.Trigger(targetInfo, targetInfo);
                 effecter.Cleanup();
+                if (!plant.LeaflessNow && plant.def.defName != "Plant_SaguaroCactus")
+                {
+                    Effecter effecter2 = EffecterDefOf.Effecter_SSR_PGHitTree.Spawn();
+                    effecter2.Trigger(targetInfo, targetInfo);
+                    effecter2.Cleanup();
+                }
             }
-            GenExplosion.DoExplosion(base.Position, map, def.projectile.explosionRadius, def.projectile.damageDef, launcher, DamageAmount, ArmorPenetration, def.projectile.soundExplode, equipmentDef, def, intendedTarget.Thing, def.projectile.postExplosionSpawnThingDef, postExplosionSpawnThingDefWater: def.projectile.postExplosionSpawnThingDefWater, postExplosionSpawnChance: def.projectile.postExplosionSpawnChance, postExplosionSpawnThingCount: def.projectile.postExplosionSpawnThingCount, postExplosionGasType: def.projectile.postExplosionGasType, preExplosionSpawnThingDef: def.projectile.preExplosionSpawnThingDef, preExplosionSpawnChance: def.projectile.preExplosionSpawnChance, preExplosionSpawnThingCount: def.projectile.preExplosionSpawnThingCount, applyDamageToExplosionCellsNeighbors: def.projectile.applyDamageToExplosionCellsNeighbors, chanceToStartFire: def.projectile.explosionChanceToStartFire, damageFalloff: def.projectile.explosionDamageFalloff, direction: origin.AngleToFlat(destination), ignoredThings: null, affectedAngle: null, doVisualEffects: true, propagationSpeed: def.projectile.damageDef.expolosionPropagationSpeed, excludeRadius: 0f, doSoundEffects: true, screenShakeFactor: def.projectile.screenShakeFactor);
+
+            BattleLogEntry_RangedImpact battleLogEntry = new BattleLogEntry_RangedImpact(launcher, hitThing, intendedTarget.Thing, equipmentDef, def, targetCoverDef);
+            Find.BattleLog.Add(battleLogEntry);
+            OriginalNotifyImpact(hitThing, Map, impactCell);
+
+            bool instigatorGuilty = !(launcher is Pawn pawn) || !pawn.Drafted;
+            DamageInfo dinfo = new DamageInfo(def.projectile.damageDef, DamageAmount, ArmorPenetration, ExactRotation.eulerAngles.y, launcher, null, equipmentDef, DamageInfo.SourceCategory.ThingOrUnknown, intendedTarget.Thing, instigatorGuilty);
+            dinfo.SetWeaponQuality(equipmentQuality);
+            hitThing.TakeDamage(dinfo).AssociateWithLog(battleLogEntry);
+            (hitThing as Pawn)?.stances?.stagger.Notify_BulletImpact(this);
+            if (def.projectile.extraDamages == null)
+            {
+                return;
+            }
+            foreach (ExtraDamage extraDamage in def.projectile.extraDamages)
+            {
+                if (Rand.Chance(extraDamage.chance))
+                {
+                    DamageInfo dinfo2 = new DamageInfo(extraDamage.def, extraDamage.amount, extraDamage.AdjustedArmorPenetration(), ExactRotation.eulerAngles.y, launcher, null, equipmentDef, DamageInfo.SourceCategory.ThingOrUnknown, intendedTarget.Thing, instigatorGuilty);
+                    hitThing.TakeDamage(dinfo2).AssociateWithLog(battleLogEntry);
+                }
+            }
         }
+
         public override void ExposeData()
         {
             base.ExposeData();
@@ -579,55 +488,7 @@ namespace HJ_SSR.Weapons
         public List<Thing> attackedThings = new List<Thing>();
         public float penetratingPower;
 
-        public void OriginalImpact(Thing hitThing, bool blockedByShield = false)
-        {
-            Map map = base.Map;
-            IntVec3 position = base.Position;
-            base.Impact(hitThing, blockedByShield);
-            BattleLogEntry_RangedImpact battleLogEntry_RangedImpact = new BattleLogEntry_RangedImpact(launcher, hitThing, intendedTarget.Thing, equipmentDef, def, targetCoverDef);
-            Find.BattleLog.Add(battleLogEntry_RangedImpact);
-            OriginalNotifyImpact(hitThing, map, position);
-            if (hitThing != null)
-            {
-                Pawn pawn;
-                bool instigatorGuilty = (pawn = launcher as Pawn) == null || !pawn.Drafted;
-                DamageInfo dinfo = new DamageInfo(def.projectile.damageDef, DamageAmount, ArmorPenetration, ExactRotation.eulerAngles.y, launcher, null, equipmentDef, DamageInfo.SourceCategory.ThingOrUnknown, intendedTarget.Thing, instigatorGuilty);
-                dinfo.SetWeaponQuality(equipmentQuality);
-                hitThing.TakeDamage(dinfo).AssociateWithLog(battleLogEntry_RangedImpact);
-                Pawn pawn2 = hitThing as Pawn;
-                pawn2?.stances?.stagger.Notify_BulletImpact(this);
-                if (def.projectile.extraDamages != null)
-                {
-                    foreach (ExtraDamage extraDamage in def.projectile.extraDamages)
-                    {
-                        if (Rand.Chance(extraDamage.chance))
-                        {
-                            DamageInfo dinfo2 = new DamageInfo(extraDamage.def, extraDamage.amount, extraDamage.AdjustedArmorPenetration(), ExactRotation.eulerAngles.y, launcher, null, equipmentDef, DamageInfo.SourceCategory.ThingOrUnknown, intendedTarget.Thing, instigatorGuilty);
-                            hitThing.TakeDamage(dinfo2).AssociateWithLog(battleLogEntry_RangedImpact);
-                        }
-                    }
-                }
-                return;
-            }
-
-            if (!blockedByShield)
-            {
-                SoundDefOf.BulletImpact_Ground.PlayOneShot(new TargetInfo(base.Position, map));
-                if (base.Position.GetTerrain(map).takeSplashes)
-                {
-                    FleckMaker.WaterSplash(ExactPosition, map, Mathf.Sqrt(DamageAmount) * 1f, 4f);
-                }
-                else
-                {
-                    FleckMaker.Static(ExactPosition, map, FleckDefOf.ShotHit_Dirt);
-                }
-            }
-
-            //if (Rand.Chance(def.projectile.bulletChanceToStartFire))
-            //{
-            //    FireUtility.TryStartFireIn(base.Position, map, def.projectile.bulletFireSizeRange.RandomInRange, launcher);
-            //}
-        }
+        /// <summary>向命中点周围对象广播“附近子弹命中”事件，保持原版感知行为。</summary>
         public void OriginalNotifyImpact(Thing hitThing, Map map, IntVec3 position)
         {
             BulletImpactData bulletImpactData = default(BulletImpactData);
