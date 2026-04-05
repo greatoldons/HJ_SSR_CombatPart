@@ -414,7 +414,16 @@ namespace HJ_SSR.Weapons
             {
                 return false;
             }
-            if (thing is Building || thing is Pawn)
+            if (thing is Building building)
+            {
+                // 友军墙体不参与过滤：允许被命中判定。
+                if (building.def.defName.Contains("Wall"))
+                {
+                    return false;
+                }
+                return !thing.Faction.HostileTo(launcher.Faction);
+            }
+            if (thing is Pawn)
             {
                 return !thing.Faction.HostileTo(launcher.Faction);
             }
